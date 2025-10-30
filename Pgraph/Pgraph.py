@@ -143,10 +143,10 @@ class Pgraph():
         'defaults:','\n',
         'material_type=raw_material','\n',
         'material_flow_rate_lower_bound=0','\n',
-        'material_flow_rate_upper_bound=10000000','\n',
+        'material_flow_rate_upper_bound=1000000000','\n',
         'material_price=0','\n',
         'operating_unit_capacity_lower_bound=0','\n',
-        'operating_unit_capacity_upper_bound=10000000','\n',
+        'operating_unit_capacity_upper_bound=1000000000','\n',
         'operating_unit_fix_cost=0','\n',
         'operating_unit_proportional_cost=0','\n',
         '\n',
@@ -997,10 +997,11 @@ class Pgraph():
         
         default_segments = {child.tag: child for child in segments["Default"]}
         # material_defaults = {child.tag: child for child in default_segments["Material"]}
-        # unit_defaults = {child.tag: child for child in default_segments["OperatingUnit"]}
+        unit_defaults = {child.tag: child for child in default_segments["OperatingUnit"]}
         edge_defaults = {child.tag: child for child in default_segments["Edge"]}
+        unit_default_payoutperiod = float(unit_defaults["PayoutPeriod"].text)
         edge_default_flowrate = float(edge_defaults["FlowRate"].text)
-        print(edge_default_flowrate)
+        #print(edge_default_flowrate)
         
         for material_item in segments["Materials"]:
             subsegments = {child.tag: child for child in material_item}
@@ -1026,8 +1027,8 @@ class Pgraph():
             G.add_node(node_name,**material_values)
             node_id_to_name[material_item.get('ID')] = node_name
             
-        #TODO: For now it only handles operating costs, no support for investment cost yet
-        #TODO: What policy do we use for handling investment costs?
+        #TODO: Investment cost policy for now: same as P-Graph Studio: divide by payout period and add to operating cost
+        #TODO: Is this ok?
         for opunit_item in segments["OperatingUnits"]:
             subsegments = {child.tag: child for child in opunit_item}
             unit_name = opunit_item.get('Name')
@@ -1035,15 +1036,24 @@ class Pgraph():
             capupper = float(get_pgraph_param_value(subsegments["ParameterList"], "capupper"))
             opercostfix = float(get_pgraph_param_value(subsegments["ParameterList"], "opercostfix"))
             opercostprop = float(get_pgraph_param_value(subsegments["ParameterList"], "opercostprop"))
+            invcostfix = float(get_pgraph_param_value(subsegments["ParameterList"], "investcostfix"))
+            invcostprop = float(get_pgraph_param_value(subsegments["ParameterList"], "investcostprop"))
+            payoutperiod = float(get_pgraph_param_value(subsegments["ParameterList"], "payoutperiod"))
             opunit_values = {'names':unit_name}
+            if payoutperiod == -1:
+                payoutperiod = unit_default_payoutperiod
             if caplower != -1:
                 opunit_values['capacity_lower_bound'] = caplower
             if capupper != -1:
                 opunit_values['capacity_upper_bound'] = capupper
             if opercostfix != -1:
                 opunit_values['fix_cost'] = opercostfix
+                if invcostfix != -1:
+                    opunit_values['fix_cost'] += invcostfix / payoutperiod
             if opercostprop != -1:
                 opunit_values['proportional_cost'] = opercostprop
+                if invcostprop != -1:
+                    opunit_values['proportional_cost'] += invcostprop / payoutperiod
             node_name = "O_"+unit_name if add_name_prefixes else unit_name
             G.add_node(node_name,**opunit_values)
             node_id_to_name[opunit_item.get('ID')] = node_name
