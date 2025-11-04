@@ -38,6 +38,7 @@ class Pgraph():
         self.path=os.path.dirname(os.path.realpath(__file__))+r"/solver/"
         self.gmatlist=[]
         self.goplist=[]
+        self.gopiolist=[]
         self.goolist=[]
         self.wine_installed=False #For Linux Only
         self.input_file=input_file
@@ -301,6 +302,7 @@ class Pgraph():
             path=self.path
         gmatlist=[]
         goplist=[]
+        gopiolist=[]
         goolist=[]
         
         #clean strings
@@ -344,6 +346,7 @@ class Pgraph():
                 s=False
                 tmatlist=[]
                 toplist=[]
+                tiolist=[]
                 for j in range(len(sol_list[i])):
                     if sol_list[i][j][:len(comp[0])]==comp[0]: #Materials
                         comp_ind=0
@@ -371,13 +374,22 @@ class Pgraph():
                             glist=glist.replace('(', ' ')
                             glist=glist.split()
                             toplist.append(glist)
+                            
+                            giolist=sol_list[i][j].split(':')[1]
+                            giolist=giolist.replace('(',' ')
+                            giolist=giolist.replace(')',' ')
+                            giolist=giolist.replace('=>',' ')
+                            giolist=giolist.split()
+                            tiolist.append([glist[1]]+giolist)
                     if comp_ind==2:  #Total annual cost
                         goolist.append(sol_list[i][j].split()[3])
                     s=False
 
                 goplist.append(toplist)
-                gmatlist.append(tmatlist)        
-            self.goplist=goplist
+                gmatlist.append(tmatlist)   
+                gopiolist.append(tiolist)
+            self.goplist=goplist    
+            self.gopiolist=gopiolist
             self.gmatlist=gmatlist
             self.goolist=goolist
             if len(goolist)==0: 
@@ -1078,6 +1090,85 @@ class Pgraph():
             
         P=Pgraph(problem_network=G, mutual_exclusion=me_list, solver=solver, max_sol=max_sol)
         return P
+    
+    def write_results_to_studio_file(self, studio_file, target_file=""):
+        parser = etree.XMLParser(encoding='UTF-8',remove_blank_text=True)
+        with open(studio_file, 'r') as infile:
+            xml_data = etree.parse(infile, parser=parser)
+        root = xml_data.getroot()
+        segments = {child.tag: child for child in root}
+        if "Solutions" in segments:
+            root.remove(segments['Solutions'])
+            
+        def get_pgraph_param_value(paramlist_node, paramname):
+            return paramlist_node.xpath(f"child::Parameter[@Name='{paramname}']")[0].get("Value")
+        
+        default_segments = {child.tag: child for child in segments["Default"]}
+        quantity_defaults = {child.tag: child for child in default_segments["Quantity"]}
+        default_measure_unit = quantity_defaults["default_mes"].text.split("(")[1].split(")")[0]
+        default_time_unit = quantity_defaults["time_mu"].text
+        
+        material_name_to_element = {}
+        material_id_to_element = {}
+        material_name_to_measure_unit = {}
+        for material_item in segments["Materials"]:
+            subsegments = {child.tag: child for child in material_item}
+            material_name_to_element[material_item.get('Name')] = material_item
+            material_id_to_element[material_item.get('ID')] = material_item
+            material_name_to_measure_unit[material_item.get('Name')] = get_pgraph_param_value(subsegments["ParameterList"], "measurementunit").split("(")[1].split(")")[0]
+            
+        unit_name_to_element = {}
+        unit_id_to_element = {}
+        for unit_item in segments["OperatingUnits"]:
+            unit_name_to_element[unit_item.get('Name')] = unit_item
+            unit_id_to_element[unit_item.get('ID')] = unit_item
+        
+        Solutions=etree.SubElement(root,"Solutions")
+
+        ## Solution 
+        ssol_list=[]
+        smats_list=[]
+        sops_list=[]
+        sop_list=[]
+
+        for i in range(len(self.goolist)):
+            snum=i+1
+            attr={"Index":str(i), "Title":"Feasible structure #"+str(snum), "OptimalValue":str(self.goolist[i]),"TotalTime":"0", "TotalMakespan":"0", "ObjectiveValue":"0", "AlgorithmUsed":self.solver}
+            ssol_list.append(etree.SubElement(Solutions,"Solution",attrib=attr))
+            smats_list.append(etree.SubElement(ssol_list[-1],"Materials"))
+            for x in self.gmatlist[i]:
+                attr={"Name":x[0][2:],"Flow":str(x[3]),"Cost":str(x[1]), "MU": f"{material_name_to_measure_unit[x[0][2:]]}/{default_time_unit}"}
+                etree.SubElement(smats_list[-1],"Material",attrib=attr)
+            
+            sops_list.append(etree.SubElement(ssol_list[-1],"OperatingUnits"))
+            for x_i in range(len(self.goplist[i])):
+                x = self.goplist[i][x_i]
+                attr={"Name":x[1][2:],"Size":str(x[0]),"Cost":str(x[2]),"MU":f"{default_measure_unit}/{default_time_unit}"}
+                sop_list.append(etree.SubElement(sops_list[-1],"OperatingUnit",attrib=attr))
+                input_element = etree.SubElement(sop_list[-1],"Input")
+                output_element = etree.SubElement(sop_list[-1],"Output")
+                io_index = 1
+                connected_materials = self.gopiolist[i][x_i]
+                while io_index < len(connected_materials):
+                    mat_name = connected_materials[io_index][2:]
+                    flow = float(connected_materials[io_index+1])
+                    mat_unit = material_name_to_measure_unit[mat_name]
+                    attr={"Name":mat_name,"Flow":str(flow),"Cost":"0", "MU": f"{mat_unit}/{default_time_unit}"}
+                    if flow < 0:
+                        etree.SubElement(input_element,"Material",attrib=attr)
+                    else:
+                        etree.SubElement(output_element,"Material",attrib=attr)
+                    io_index += 3
+        
+        header=r'<?xml version="1.0" encoding="utf-16"?>'+"\n"
+        xml_as_text=etree.tostring(xml_data,pretty_print=True,encoding='unicode', method='xml')
+        if target_file == "":
+            outfile = studio_file
+        else:
+            outfile = target_file
+        with open(outfile,"w") as f:
+            f.write(header)
+            f.write(xml_as_text)
     
     def run(self,system=None,skip_wine=False, solver_name='pgraph_solver.exe',path=None, **additional_arguments):
         '''
